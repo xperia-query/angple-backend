@@ -3,11 +3,23 @@ package gnuboard
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/damoang/angple-backend/internal/domain/gnuboard"
 	"gorm.io/gorm"
 )
+
+// postCountCache caches COUNT(*) results for large boards to avoid expensive full-index scans.
+// TTL: 30 seconds. Invalidated on write operations (create/delete/restore).
+var postCountCache sync.Map
+
+type cachedCount struct {
+	total     int64
+	expiresAt time.Time
+}
+
+const countCacheTTL = 30 * time.Second
 
 // coreColumns are the columns that exist in all g5_write_* tables
 var coreColumns = []string{
@@ -72,18 +84,34 @@ func (r *writeRepository) FindPosts(boardID string, page, limit int) ([]*gnuboar
 	offset := (page - 1) * limit
 	table := tableName(boardID)
 
-	// Posts only (wr_is_comment = 0), exclude soft deleted
-	countQuery := r.db.Table(table).Where("wr_is_comment = 0 AND wr_deleted_at IS NULL")
-	if err := countQuery.Count(&total).Error; err != nil {
-		return nil, 0, err
+	// Posts count with in-memory cache (avoids expensive COUNT on large tables)
+	cacheKey := "count:" + boardID
+	if cached, ok := postCountCache.Load(cacheKey); ok {
+		if cc := cached.(*cachedCount); time.Now().Before(cc.expiresAt) {
+			total = cc.total
+		}
+	}
+	if total == 0 {
+		countQuery := r.db.Table(table).Where("wr_is_comment = 0 AND wr_deleted_at IS NULL")
+		if err := countQuery.Count(&total).Error; err != nil {
+			return nil, 0, err
+		}
+		postCountCache.Store(cacheKey, &cachedCount{total: total, expiresAt: time.Now().Add(countCacheTTL)})
+	}
+
+	// 게시판별 커스텀 정렬 (bo_sort_field)
+	orderClause := "wr_num, wr_reply"
+	var sortField string
+	r.db.Table("g5_board").Select("bo_sort_field").Where("bo_table = ?", boardID).Scan(&sortField)
+	if sortField != "" {
+		orderClause = sortField
 	}
 
 	// Select only core columns to avoid errors with missing columns
-	// Order by wr_num (descending for latest first), then wr_reply for threaded replies
 	err := r.db.Table(table).
 		Select(coreColumns).
 		Where("wr_is_comment = 0 AND wr_deleted_at IS NULL").
-		Order("wr_num, wr_reply").
+		Order(orderClause).
 		Offset(offset).
 		Limit(limit).
 		Find(&posts).Error
@@ -150,8 +178,14 @@ func (r *writeRepository) FindDeletedPosts(boardID string, page, limit int) ([]*
 	return posts, total, err
 }
 
+// InvalidatePostCount clears the cached post count for a board
+func InvalidatePostCount(boardID string) {
+	postCountCache.Delete("count:" + boardID)
+}
+
 // CreatePost creates a new post
 func (r *writeRepository) CreatePost(boardID string, post *gnuboard.G5Write) error {
+	InvalidatePostCount(boardID)
 	return r.db.Table(tableName(boardID)).Create(post).Error
 }
 
@@ -162,6 +196,7 @@ func (r *writeRepository) UpdatePost(boardID string, post *gnuboard.G5Write) err
 
 // DeletePost permanently deletes a post and its comments from the database
 func (r *writeRepository) DeletePost(boardID string, wrID int) error {
+	InvalidatePostCount(boardID)
 	table := tableName(boardID)
 	// Delete comments first
 	if err := r.db.Table(table).Where("wr_parent = ?", wrID).Delete(&gnuboard.G5Write{}).Error; err != nil {
@@ -173,6 +208,7 @@ func (r *writeRepository) DeletePost(boardID string, wrID int) error {
 
 // SoftDeletePost marks a post and its comments as deleted
 func (r *writeRepository) SoftDeletePost(boardID string, wrID int, deletedBy string) error {
+	InvalidatePostCount(boardID)
 	table := tableName(boardID)
 	now := time.Now()
 
@@ -193,6 +229,7 @@ func (r *writeRepository) SoftDeletePost(boardID string, wrID int, deletedBy str
 
 // RestorePost restores a soft deleted post and its comments
 func (r *writeRepository) RestorePost(boardID string, wrID int) error {
+	InvalidatePostCount(boardID)
 	table := tableName(boardID)
 
 	// Restore the post
