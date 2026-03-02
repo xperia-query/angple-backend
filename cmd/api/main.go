@@ -2290,7 +2290,7 @@ func main() {
 				board.BoUseNogood = *req.UseNogood
 			}
 			if req.UploadCount != nil {
-				board.BoNumListCount = *req.UploadCount
+				// bo_num_list_count 컬럼은 DB에 없으므로 무시
 			}
 
 			if err := gnuBoardRepo.Create(board); err != nil {
@@ -2427,7 +2427,7 @@ func main() {
 				board.BoUseSns = *req.UseSns
 			}
 			if req.UploadCount != nil {
-				board.BoNumListCount = *req.UploadCount
+				// bo_num_list_count 컬럼은 DB에 없으므로 무시
 			}
 			if req.Order != nil {
 				board.BoOrder = *req.Order

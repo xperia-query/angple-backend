@@ -11,6 +11,10 @@ type BoardRepository interface {
 	FindAll() ([]*gnuboard.G5Board, error)
 	FindByGroupID(groupID string) ([]*gnuboard.G5Board, error)
 	Exists(boardID string) bool
+	Create(board *gnuboard.G5Board) error
+	Update(board *gnuboard.G5Board) error
+	Delete(boardID string) error
+	GetDB() *gorm.DB
 }
 
 type boardRepository struct {
@@ -51,4 +55,24 @@ func (r *boardRepository) Exists(boardID string) bool {
 	var count int64
 	r.db.Model(&gnuboard.G5Board{}).Where("bo_table = ?", boardID).Count(&count)
 	return count > 0
+}
+
+// Create creates a new board in g5_board
+func (r *boardRepository) Create(board *gnuboard.G5Board) error {
+	return r.db.Create(board).Error
+}
+
+// Update updates a board in g5_board
+func (r *boardRepository) Update(board *gnuboard.G5Board) error {
+	return r.db.Save(board).Error
+}
+
+// Delete deletes a board from g5_board
+func (r *boardRepository) Delete(boardID string) error {
+	return r.db.Where("bo_table = ?", boardID).Delete(&gnuboard.G5Board{}).Error
+}
+
+// GetDB returns the underlying DB instance for raw operations
+func (r *boardRepository) GetDB() *gorm.DB {
+	return r.db
 }
