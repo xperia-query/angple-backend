@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/damoang/angple-backend/internal/common"
 	"github.com/damoang/angple-backend/internal/config"
 	"github.com/damoang/angple-backend/internal/domain"
 	"github.com/damoang/angple-backend/internal/handler"
@@ -183,6 +184,9 @@ func main() {
 		cfg.JWT.RefreshIn,
 	)
 
+	// IP Protection
+	ipProtectCfg := middleware.LoadIPProtectionConfig()
+
 	// Plugin HookManager
 	pluginLogger := plugin.NewDefaultLogger("plugin")
 	_ = plugin.NewHookManager(pluginLogger)
@@ -290,7 +294,7 @@ func main() {
 		v2routes.SetupMyPage(router, pointHandler, expHandler, jwtManager)
 
 		// DisciplineLog routes (uses gnuboard g5_write_disciplinelog table)
-		disciplineLogHandler := v2handler.NewDisciplineLogHandler(gnuWriteRepo)
+		disciplineLogHandler := v2handler.NewDisciplineLogHandler(gnuWriteRepo, db)
 		v2routes.SetupDisciplineLog(router, disciplineLogHandler, jwtManager)
 
 		// v2 Auth
@@ -607,6 +611,11 @@ func main() {
 			noticeIDMap := v1handler.BuildNoticeIDMap(noticeIDs)
 			items := v1handler.TransformToV1Posts(notices, noticeIDMap)
 
+			// Admin sees full (unmasked) IP
+			if middleware.GetUserLevel(c) >= 10 {
+				v1handler.OverrideIPForAdmin(items, notices)
+			}
+
 			response := gin.H{"success": true, "data": items}
 
 			// Cache the response
@@ -906,6 +915,11 @@ func main() {
 			// Transform to v1 format
 			items := v1handler.TransformToV1Posts(posts, noticeIDMap)
 
+			// Admin sees full (unmasked) IP
+			if middleware.GetUserLevel(c) >= 10 {
+				v1handler.OverrideIPForAdmin(items, posts)
+			}
+
 			// Enrich thumbnails from g5_board_file for posts that have files but no thumbnail
 			var needFileIDs []int
 			for _, item := range items {
@@ -986,6 +1000,11 @@ func main() {
 
 			postDetail := v1handler.TransformToV1PostDetail(post, isNotice)
 
+			// Admin sees full (unmasked) IP
+			if middleware.GetUserLevel(c) >= 10 {
+				v1handler.OverrideIPForAdminSingle(postDetail, post)
+			}
+
 			// 비밀글 접근 제어: 작성자 또는 관리자만 내용 열람 가능
 			if strings.Contains(post.WrOption, "secret") {
 				currentUserID := middleware.GetUserID(c)
@@ -1042,6 +1061,10 @@ func main() {
 			}
 
 			transformed := v1handler.TransformToV1Comments(comments)
+			// Admin sees full (unmasked) IP
+			if middleware.GetUserLevel(c) >= 10 {
+				v1handler.OverrideIPForAdmin(transformed, comments)
+			}
 			for i, comment := range comments {
 				if cnt, ok := editCountMap[comment.WrID]; ok && cnt > 0 {
 					transformed[i]["edit_count"] = cnt
@@ -1220,9 +1243,271 @@ func main() {
 			})
 		})
 
-		// POST routes still use v2 handlers for now (will be migrated later)
-		v1Boards.POST("/:slug/posts", middleware.JWTAuth(jwtManager), v2Handler.CreatePost)
-		v1Boards.POST("/:slug/posts/:id/comments", middleware.JWTAuth(jwtManager), v2Handler.CreateComment)
+		// POST /api/v1/boards/:slug/posts - Create post in g5_write_{slug}
+		v1Boards.POST("/:slug/posts", middleware.JWTAuth(jwtManager), middleware.IPProtection(ipProtectCfg), func(c *gin.Context) {
+			slug := c.Param("slug")
+
+			// 게시판 설정 조회
+			board, err := gnuBoardRepo.FindByID(slug)
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "게시판을 찾을 수 없습니다"})
+				return
+			}
+
+			// 요청 바디 파싱
+			var req struct {
+				Title    string  `json:"title" binding:"required"`
+				Content  string  `json:"content" binding:"required"`
+				Category *string `json:"category"`
+				IsSecret *bool   `json:"is_secret"`
+				Link1    *string `json:"link1"`
+				Link2    *string `json:"link2"`
+				Extra1   *string `json:"extra_1"`
+				Extra2   *string `json:"extra_2"`
+				Extra3   *string `json:"extra_3"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "제목과 내용을 입력해주세요"})
+				return
+			}
+
+			mbID := middleware.GetUserID(c)
+			userLevel := middleware.GetUserLevel(c)
+
+			// 제휴 링크 차단 검증
+			if err := common.ValidateAffiliateLinks(req.Content, slug, userLevel, false); err != nil {
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": err.Error()})
+				return
+			}
+
+			// 레벨 체크
+			if userLevel < board.BoWriteLevel {
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "글쓰기 권한이 없습니다. 레벨 " + strconv.Itoa(board.BoWriteLevel) + " 이상이 필요합니다."})
+				return
+			}
+
+			// 포인트 차감 게시판인 경우 잔액 확인
+			if board.BoWritePoint < 0 {
+				var mbNo uint64
+				if err := db.Table("g5_member").Select("mb_no").Where("mb_id = ?", mbID).Scan(&mbNo).Error; err == nil {
+					canAfford, err := v2PointRepo.CanAfford(mbNo, board.BoWritePoint)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "포인트 확인 실패"})
+						return
+					}
+					if !canAfford {
+						c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "포인트가 부족합니다. " + strconv.Itoa(-board.BoWritePoint) + "포인트가 필요합니다."})
+						return
+					}
+				}
+			}
+
+			// 작성자 닉네임 조회
+			authorName := middleware.GetNickname(c)
+			if authorName == "" {
+				db.Table("g5_member").Select("mb_nick").Where("mb_id = ?", mbID).Scan(&authorName)
+			}
+
+			// g5_write_{slug} 테이블에 게시글 INSERT
+			now := time.Now()
+			nowStr := now.Format("2006-01-02 15:04:05")
+
+			wrOption := ""
+			if req.IsSecret != nil && *req.IsSecret {
+				wrOption = "secret"
+			}
+
+			post := gnuboard.G5Write{
+				WrNum:       0,
+				WrParent:    0,
+				WrIsComment: 0,
+				WrSubject:   req.Title,
+				WrContent:   req.Content,
+				MbID:        mbID,
+				WrName:      authorName,
+				WrDatetime:  now,
+				WrLast:      nowStr,
+				WrIP:        middleware.GetClientIP(c),
+				WrOption:    wrOption,
+			}
+
+			if req.Category != nil {
+				post.CaName = *req.Category
+			}
+			if req.Link1 != nil {
+				post.WrLink1 = *req.Link1
+			}
+			if req.Link2 != nil {
+				post.WrLink2 = *req.Link2
+			}
+
+			tableName := fmt.Sprintf("g5_write_%s", slug)
+
+			// wr_num 값 계산 (가장 작은 음수값 - 1, gnuboard 정렬 규칙)
+			var minNum int
+			db.Table(tableName).Select("COALESCE(MIN(wr_num), 0)").Scan(&minNum)
+			post.WrNum = minNum - 1
+
+			if err := db.Table(tableName).Create(&post).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "게시글 작성 실패"})
+				return
+			}
+
+			// wr_parent를 자기 자신의 wr_id로 UPDATE (gnuboard 규칙)
+			db.Table(tableName).Where("wr_id = ?", post.WrID).Update("wr_parent", post.WrID)
+
+			// extra 필드 업데이트 (있는 경우)
+			extras := map[string]interface{}{}
+			if req.Extra1 != nil {
+				extras["wr_1"] = *req.Extra1
+			}
+			if req.Extra2 != nil {
+				extras["wr_2"] = *req.Extra2
+			}
+			if req.Extra3 != nil {
+				extras["wr_3"] = *req.Extra3
+			}
+			if len(extras) > 0 {
+				db.Table(tableName).Where("wr_id = ?", post.WrID).Updates(extras)
+			}
+
+			// 포인트 처리
+			if board.BoWritePoint != 0 {
+				var mbNo uint64
+				if err := db.Table("g5_member").Select("mb_no").Where("mb_id = ?", mbID).Scan(&mbNo).Error; err == nil {
+					_ = v2PointRepo.AddPoint(mbNo, board.BoWritePoint, "글쓰기", tableName, uint64(post.WrID))
+				}
+			}
+
+			c.JSON(http.StatusCreated, gin.H{
+				"success": true,
+				"data":    v1handler.TransformToV1PostDetail(&post, false),
+			})
+		})
+
+		// POST /api/v1/boards/:slug/posts/:id/comments - Create comment in g5_write_{slug}
+		v1Boards.POST("/:slug/posts/:id/comments", middleware.JWTAuth(jwtManager), middleware.IPProtection(ipProtectCfg), func(c *gin.Context) {
+			slug := c.Param("slug")
+			postID, err := strconv.Atoi(c.Param("id"))
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid post ID"})
+				return
+			}
+
+			// 게시판 설정 조회
+			board, err := gnuBoardRepo.FindByID(slug)
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "게시판을 찾을 수 없습니다"})
+				return
+			}
+
+			// 요청 바디 파싱
+			var req struct {
+				Content  string `json:"content" binding:"required"`
+				ParentID *int   `json:"parent_id,omitempty"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "내용을 입력해주세요"})
+				return
+			}
+
+			mbID := middleware.GetUserID(c)
+			userLevel := middleware.GetUserLevel(c)
+
+			// 제휴 링크 차단 검증
+			if err := common.ValidateAffiliateLinks(req.Content, slug, userLevel, false); err != nil {
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": err.Error()})
+				return
+			}
+
+			// 레벨 체크
+			if userLevel < board.BoCommentLevel {
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "댓글 작성 권한이 없습니다. 레벨 " + strconv.Itoa(board.BoCommentLevel) + " 이상이 필요합니다."})
+				return
+			}
+
+			// 포인트 차감 게시판인 경우 잔액 확인
+			if board.BoCommentPoint < 0 {
+				var mbNo uint64
+				if err := db.Table("g5_member").Select("mb_no").Where("mb_id = ?", mbID).Scan(&mbNo).Error; err == nil {
+					canAfford, err := v2PointRepo.CanAfford(mbNo, board.BoCommentPoint)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "포인트 확인 실패"})
+						return
+					}
+					if !canAfford {
+						c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "포인트가 부족합니다. " + strconv.Itoa(-board.BoCommentPoint) + "포인트가 필요합니다."})
+						return
+					}
+				}
+			}
+
+			// 작성자 닉네임 조회
+			authorName := middleware.GetNickname(c)
+			if authorName == "" {
+				db.Table("g5_member").Select("mb_nick").Where("mb_id = ?", mbID).Scan(&authorName)
+			}
+
+			// g5_write_{slug} 테이블에 댓글 INSERT
+			now := time.Now()
+			nowStr := now.Format("2006-01-02 15:04:05")
+
+			comment := gnuboard.G5Write{
+				WrNum:          0,
+				WrParent:       postID,
+				WrIsComment:    1,
+				WrComment:      0,
+				WrCommentReply: "",
+				WrContent:      req.Content,
+				MbID:           mbID,
+				WrName:         authorName,
+				WrDatetime:     now,
+				WrLast:         nowStr,
+				WrIP:           middleware.GetClientIP(c),
+			}
+
+			if err := gnuWriteRepo.CreateComment(slug, &comment); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "댓글 작성 실패"})
+				return
+			}
+
+			// 부모 게시글의 wr_comment 카운트 갱신
+			tableName := fmt.Sprintf("g5_write_%s", slug)
+			var commentCount int64
+			db.Table(tableName).Where("wr_parent = ? AND wr_is_comment = 1 AND wr_deleted_at IS NULL", postID).Count(&commentCount)
+			db.Table(tableName).Where("wr_id = ?", postID).Update("wr_comment", commentCount)
+
+			// 포인트 처리
+			if board.BoCommentPoint != 0 {
+				var mbNo uint64
+				if err := db.Table("g5_member").Select("mb_no").Where("mb_id = ?", mbID).Scan(&mbNo).Error; err == nil {
+					_ = v2PointRepo.AddPoint(mbNo, board.BoCommentPoint, "댓글작성", fmt.Sprintf("g5_write_%s", slug), uint64(comment.WrID))
+				}
+			}
+
+			// Admin sees full IP, others see masked
+			commentIP := v1handler.MaskIP(comment.WrIP)
+			if middleware.GetUserLevel(c) >= 10 {
+				commentIP = comment.WrIP
+			}
+
+			c.JSON(http.StatusCreated, gin.H{
+				"success": true,
+				"data": gin.H{
+					"id":         comment.WrID,
+					"post_id":    postID,
+					"content":    comment.WrContent,
+					"author":     authorName,
+					"author_id":  mbID,
+					"author_ip":  commentIP,
+					"likes":      0,
+					"dislikes":   0,
+					"depth":      0,
+					"created_at": now.Format(time.RFC3339),
+					"is_secret":  false,
+				},
+			})
+		})
 
 		// PUT /api/v1/boards/:slug/posts/:id - Update post
 		v1Boards.PUT("/:slug/posts/:id", middleware.JWTAuth(jwtManager), func(c *gin.Context) {

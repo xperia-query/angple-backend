@@ -1,11 +1,18 @@
 package v1handler
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/damoang/angple-backend/internal/domain/gnuboard"
 )
+
+// imgSrcRegex matches src attribute in <img> tags
+var imgSrcRegex = regexp.MustCompile(`<img[^>]+src=["']([^"']+)["']`)
+
+// kst is the Asia/Seoul timezone for parsing gnuboard datetime values
+var kst = time.FixedZone("KST", 9*60*60)
 
 // parseWrLast converts DB datetime string to RFC3339 format
 // Returns nil if parsing fails or if the time equals created time (no updates)
@@ -13,16 +20,52 @@ func parseWrLast(wrLast string, createdAt time.Time) any {
 	if wrLast == "" {
 		return nil
 	}
-	// DB stores as "2006-01-02 15:04:05"
-	lastTime, err := time.ParseInLocation("2006-01-02 15:04:05", wrLast, time.Local)
+	// DB stores as "2006-01-02 15:04:05" in KST
+	lastTime, err := time.ParseInLocation("2006-01-02 15:04:05", wrLast, kst)
 	if err != nil {
 		return nil
 	}
 	// If updated_at equals created_at, no actual update occurred
-	if lastTime.Equal(createdAt) || lastTime.Sub(createdAt).Abs() < time.Second {
+	createdAtKST := createdAt.In(kst)
+	if lastTime.Equal(createdAtKST) || lastTime.Sub(createdAtKST).Abs() < time.Second {
 		return nil
 	}
 	return lastTime.Format(time.RFC3339)
+}
+
+// extractFirstImageURL extracts the first <img src="..."> URL from HTML content
+func extractFirstImageURL(html string) string {
+	m := imgSrcRegex.FindStringSubmatch(html)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
+// MaskIP masks the 2nd octet of an IPv4 address with ♡ (e.g. "1.2.3.4" → "1.♡.3.4")
+func MaskIP(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	parts := strings.Split(ip, ".")
+	if len(parts) == 4 {
+		return parts[0] + ".♡." + parts[2] + "." + parts[3]
+	}
+	return ip
+}
+
+// OverrideIPForAdmin replaces masked author_ip with full IP when requester is admin
+func OverrideIPForAdmin(items []map[string]any, posts []*gnuboard.G5Write) {
+	for i, item := range items {
+		if i < len(posts) {
+			item["author_ip"] = posts[i].WrIP
+		}
+	}
+}
+
+// OverrideIPForAdminSingle replaces masked author_ip with full IP for a single item
+func OverrideIPForAdminSingle(item map[string]any, w *gnuboard.G5Write) {
+	item["author_ip"] = w.WrIP
 }
 
 // TransformToV1Post converts G5Write to v1 API response format
@@ -42,14 +85,17 @@ func TransformToV1Post(w *gnuboard.G5Write, isNotice bool) map[string]any {
 		"is_secret":      strings.Contains(w.WrOption, "secret"),
 		"link1":          w.WrLink1,
 		"link2":          w.WrLink2,
+		"author_ip":      MaskIP(w.WrIP),
 		"created_at":     w.WrDatetime.Format(time.RFC3339),
 		"updated_at":     parseWrLast(w.WrLast, w.WrDatetime),
 	}
 
-	// Add thumbnail/extra_10 if wr_10 has value (for gallery/message layouts)
+	// Add thumbnail: priority is wr_10 > first <img> in content
 	if w.Wr10 != "" {
 		result["thumbnail"] = w.Wr10
 		result["extra_10"] = w.Wr10
+	} else if img := extractFirstImageURL(w.WrContent); img != "" {
+		result["thumbnail"] = img
 	}
 
 	return result
@@ -83,8 +129,10 @@ func TransformToV1Comment(w *gnuboard.G5Write) map[string]any {
 		"author_id":  w.MbID,
 		"likes":      w.WrGood,
 		"dislikes":   w.WrNogood,
+		"author_ip":  MaskIP(w.WrIP),
 		"depth":      depth,
 		"created_at": w.WrDatetime.Format(time.RFC3339),
+		"updated_at": parseWrLast(w.WrLast, w.WrDatetime),
 		"is_secret":  strings.Contains(w.WrOption, "secret"),
 	}
 }
