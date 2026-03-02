@@ -9,19 +9,22 @@ import (
 	"time"
 
 	"github.com/damoang/angple-backend/internal/common"
+	"github.com/damoang/angple-backend/internal/domain/gnuboard"
 	gnurepo "github.com/damoang/angple-backend/internal/repository/gnuboard"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // DisciplineLogHandler handles discipline log API endpoints
 // Reads from g5_write_disciplinelog table (gnuboard legacy format)
 type DisciplineLogHandler struct {
 	writeRepo gnurepo.WriteRepository
+	db        *gorm.DB
 }
 
 // NewDisciplineLogHandler creates a new DisciplineLogHandler
-func NewDisciplineLogHandler(writeRepo gnurepo.WriteRepository) *DisciplineLogHandler {
-	return &DisciplineLogHandler{writeRepo: writeRepo}
+func NewDisciplineLogHandler(writeRepo gnurepo.WriteRepository, db *gorm.DB) *DisciplineLogHandler {
+	return &DisciplineLogHandler{writeRepo: writeRepo, db: db}
 }
 
 // DisciplineLogContent represents the JSON structure in wr_content
@@ -173,6 +176,18 @@ func getMemberNickFromTitle(title string) string {
 	return title
 }
 
+// disciplineLogColumns are the columns selected for discipline log queries
+var disciplineLogColumns = []string{
+	"wr_id", "wr_num", "wr_reply", "wr_parent", "wr_is_comment",
+	"wr_comment", "wr_comment_reply", "ca_name", "wr_option",
+	"wr_subject", "wr_content", "wr_link1", "wr_link2",
+	"wr_link1_hit", "wr_link2_hit", "wr_hit", "wr_good", "wr_nogood",
+	"mb_id", "wr_password", "wr_name", "wr_email", "wr_homepage",
+	"wr_datetime", "wr_file", "wr_last", "wr_ip",
+	"wr_10",
+	"wr_deleted_at", "wr_deleted_by",
+}
+
 // GetList handles GET /api/v1/discipline-logs
 func (h *DisciplineLogHandler) GetList(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -183,12 +198,28 @@ func (h *DisciplineLogHandler) GetList(c *gin.Context) {
 	if limit < 1 || limit > 100 {
 		limit = 20
 	}
+	offset := (page - 1) * limit
 
-	// Read from g5_write_disciplinelog
-	posts, total, err := h.writeRepo.FindPosts("disciplinelog", page, limit)
-	if err != nil {
-		common.V2ErrorResponse(c, http.StatusInternalServerError, "이용제한 기록 조회 실패", err)
-		return
+	memberID := c.Query("member_id")
+
+	var posts []*gnuboard.G5Write
+	var total int64
+
+	if memberID != "" {
+		// Filter by member_id using JSON_EXTRACT on wr_content
+		table := "g5_write_disciplinelog"
+		filter := "wr_is_comment = 0 AND wr_deleted_at IS NULL AND JSON_VALID(wr_content) AND JSON_UNQUOTE(JSON_EXTRACT(wr_content, '$.penalty_mb_id')) = ?"
+
+		h.db.Table(table).Where(filter, memberID).Count(&total)
+		h.db.Table(table).Select(disciplineLogColumns).Where(filter, memberID).
+			Order("wr_num, wr_reply").Offset(offset).Limit(limit).Find(&posts)
+	} else {
+		var err error
+		posts, total, err = h.writeRepo.FindPosts("disciplinelog", page, limit)
+		if err != nil {
+			common.V2ErrorResponse(c, http.StatusInternalServerError, "이용제한 기록 조회 실패", err)
+			return
+		}
 	}
 
 	items := make([]DisciplineLogListItem, 0, len(posts))
