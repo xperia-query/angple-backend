@@ -96,7 +96,8 @@ func (s *V2APISuite) SetupSuite() {
 
 	permChecker := middleware.NewDBBoardPermissionChecker(boardRepo)
 	v2Handler := v2handler.NewV2Handler(userRepo, postRepo, commentRepo, boardRepo, permChecker)
-	authSvc := v2svc.NewV2AuthService(userRepo, s.jwtManager)
+	expRepo := v2repo.NewExpRepository(db)
+	authSvc := v2svc.NewV2AuthService(userRepo, s.jwtManager, expRepo)
 	authHandler := v2handler.NewV2AuthHandler(authSvc)
 
 	s.router = gin.New()
