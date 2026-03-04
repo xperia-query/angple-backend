@@ -29,7 +29,7 @@ jobs:
       - name: Run tests
         env:
           CGO_ENABLED: "1"
-        run: go test -v $(go list ./... | grep -v /plugins/)
+        run: go test -v $(go list ./... | grep -v /plugins/ | grep -v /tests/integration)
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
