@@ -30,7 +30,7 @@ func (r *boardDisplaySettingsRepository) FindByBoardSlug(slug string) (*v2.V2Boa
 		// Return default settings if not found
 		return &v2.V2BoardDisplaySettings{
 			BoardID:       slug,
-			ListLayout:    "compact",
+			ListLayout:    "classic",
 			ViewLayout:    "basic",
 			CommentLayout: "flat",
 			ShowPreview:   false,

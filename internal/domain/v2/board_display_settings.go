@@ -8,7 +8,7 @@ import "time"
 // NOTE: board_id is varchar(20) PRIMARY KEY (board slug), matching existing table schema
 type V2BoardDisplaySettings struct {
 	BoardID       string    `gorm:"column:board_id;type:varchar(20);primaryKey" json:"board_id"`
-	ListLayout    string    `gorm:"column:list_layout;type:varchar(30);default:'compact'" json:"list_layout"`
+	ListLayout    string    `gorm:"column:list_layout;type:varchar(30);default:'classic'" json:"list_layout"`
 	ViewLayout    string    `gorm:"column:view_layout;type:varchar(30);default:'basic'" json:"view_layout"`
 	CommentLayout string    `gorm:"column:comment_layout;type:varchar(30);default:'flat'" json:"comment_layout"`
 	ShowPreview   bool      `gorm:"column:show_preview;default:false" json:"show_preview"`
