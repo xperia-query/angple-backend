@@ -639,23 +639,23 @@ func main() {
 		router.GET("/api/v1/notifications/unread-count", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"count": 0}})
 		})
-		// v1 members memo — 관리자가 회원에 대해 남긴 메모 (g5_member_memo)
-		router.GET("/api/v1/members/:id/memo", middleware.OptionalJWTAuth(jwtManager), func(c *gin.Context) {
-			// 관리자만 메모 조회 가능
-			userLevel := middleware.GetUserLevel(c)
-			if userLevel < 10 {
-				c.JSON(http.StatusOK, gin.H{"success": true, "data": nil})
-				return
-			}
+		// v1 members memo — 회원이 다른 회원에 대해 남긴 메모 (g5_member_memo)
+		memberMemoGroup := router.Group("/api/v1/members/:id/memo")
+		memberMemoGroup.Use(middleware.JWTAuth(jwtManager))
+
+		// GET /api/v1/members/:id/memo — 메모 조회
+		memberMemoGroup.GET("", func(c *gin.Context) {
 			currentUserID := middleware.GetUserID(c)
 			targetID := c.Param("id")
 
 			type memoRow struct {
-				ID       int    `gorm:"column:id" json:"id"`
-				MemberID string `gorm:"column:member_id" json:"member_id"`
-				TargetID string `gorm:"column:target_member_id" json:"target_member_id"`
-				Memo     string `gorm:"column:memo" json:"memo"`
-				Color    string `gorm:"column:color" json:"color"`
+				ID         int     `gorm:"column:id" json:"id"`
+				MemberID   string  `gorm:"column:member_id" json:"member_id"`
+				TargetID   string  `gorm:"column:target_member_id" json:"target_id"`
+				Memo       string  `gorm:"column:memo" json:"content"`
+				MemoDetail *string `gorm:"column:memo_detail" json:"memo_detail"`
+				Color      string  `gorm:"column:color" json:"color"`
+				UpdatedAt  *string `gorm:"column:updated_at" json:"updated_at"`
 			}
 			var memo memoRow
 			err := db.Table("g5_member_memo").
@@ -666,6 +666,130 @@ func main() {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"success": true, "data": memo})
+		})
+
+		// POST /api/v1/members/:id/memo — 메모 생성/수정 (upsert)
+		memberMemoGroup.POST("", func(c *gin.Context) {
+			currentUserID := middleware.GetUserID(c)
+			targetID := c.Param("id")
+
+			var req struct {
+				Content    string `json:"content" binding:"required"`
+				MemoDetail string `json:"memo_detail"`
+				Color      string `json:"color"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "content is required"})
+				return
+			}
+
+			color := req.Color
+			if color == "" {
+				color = "yellow"
+			}
+
+			memo := map[string]interface{}{
+				"member_id":        currentUserID,
+				"target_member_id": targetID,
+				"memo":             req.Content,
+				"memo_detail":      req.MemoDetail,
+				"color":            color,
+			}
+			// Try INSERT, on duplicate key UPDATE
+			err := db.Table("g5_member_memo").Create(memo).Error
+			if err != nil {
+				// Duplicate entry — update instead
+				err = db.Table("g5_member_memo").
+					Where("member_id = ? AND target_member_id = ?", currentUserID, targetID).
+					Updates(map[string]interface{}{
+						"memo":        req.Content,
+						"memo_detail": req.MemoDetail,
+						"color":       color,
+					}).Error
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to save memo"})
+					return
+				}
+			}
+
+			// Return saved memo
+			type memoRow struct {
+				ID         int     `gorm:"column:id" json:"id"`
+				MemberID   string  `gorm:"column:member_id" json:"member_id"`
+				TargetID   string  `gorm:"column:target_member_id" json:"target_id"`
+				Memo       string  `gorm:"column:memo" json:"content"`
+				MemoDetail *string `gorm:"column:memo_detail" json:"memo_detail"`
+				Color      string  `gorm:"column:color" json:"color"`
+				UpdatedAt  *string `gorm:"column:updated_at" json:"updated_at"`
+			}
+			var saved memoRow
+			db.Table("g5_member_memo").
+				Where("member_id = ? AND target_member_id = ?", currentUserID, targetID).
+				First(&saved)
+			c.JSON(http.StatusOK, gin.H{"success": true, "data": saved})
+		})
+
+		// PUT /api/v1/members/:id/memo — 메모 수정 (POST와 동일한 upsert)
+		memberMemoGroup.PUT("", func(c *gin.Context) {
+			currentUserID := middleware.GetUserID(c)
+			targetID := c.Param("id")
+
+			var req struct {
+				Content    string `json:"content" binding:"required"`
+				MemoDetail string `json:"memo_detail"`
+				Color      string `json:"color"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "content is required"})
+				return
+			}
+
+			color := req.Color
+			if color == "" {
+				color = "yellow"
+			}
+
+			err := db.Table("g5_member_memo").
+				Where("member_id = ? AND target_member_id = ?", currentUserID, targetID).
+				Updates(map[string]interface{}{
+					"memo":        req.Content,
+					"memo_detail": req.MemoDetail,
+					"color":       color,
+				}).Error
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to update memo"})
+				return
+			}
+
+			type memoRow struct {
+				ID         int     `gorm:"column:id" json:"id"`
+				MemberID   string  `gorm:"column:member_id" json:"member_id"`
+				TargetID   string  `gorm:"column:target_member_id" json:"target_id"`
+				Memo       string  `gorm:"column:memo" json:"content"`
+				MemoDetail *string `gorm:"column:memo_detail" json:"memo_detail"`
+				Color      string  `gorm:"column:color" json:"color"`
+				UpdatedAt  *string `gorm:"column:updated_at" json:"updated_at"`
+			}
+			var saved memoRow
+			db.Table("g5_member_memo").
+				Where("member_id = ? AND target_member_id = ?", currentUserID, targetID).
+				First(&saved)
+			c.JSON(http.StatusOK, gin.H{"success": true, "data": saved})
+		})
+
+		// DELETE /api/v1/members/:id/memo — 메모 삭제
+		memberMemoGroup.DELETE("", func(c *gin.Context) {
+			currentUserID := middleware.GetUserID(c)
+			targetID := c.Param("id")
+
+			err := db.Table("g5_member_memo").
+				Where("member_id = ? AND target_member_id = ?", currentUserID, targetID).
+				Delete(nil).Error
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to delete memo"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"success": true, "data": nil})
 		})
 
 		// Admin member memo CRUD
