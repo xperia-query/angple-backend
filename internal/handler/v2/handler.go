@@ -74,6 +74,43 @@ func (h *V2Handler) resolveUserIDToMbNo(mbID string) (uint64, error) {
 	return 0, strconv.ErrSyntax
 }
 
+// certExemptBoards are boards that don't require certification
+var certExemptBoards = map[string]bool{
+	"verification": true,
+	"promotion":    true,
+	"overseas":     true,
+}
+
+// checkCertification checks if the board requires certification and if the user is certified
+// Returns error message string if blocked, empty string if allowed
+func (h *V2Handler) checkCertification(c *gin.Context, boardSlug string) string {
+	if h.gnuDB == nil {
+		return ""
+	}
+	// 예외 게시판은 무조건 통과
+	if certExemptBoards[boardSlug] {
+		return ""
+	}
+	// 관리자(레벨 10+)는 바이패스
+	if middleware.GetUserLevel(c) >= 10 {
+		return ""
+	}
+	// g5_board에서 bo_use_cert 확인
+	var boUseCert string
+	if err := h.gnuDB.Table("g5_board").Select("bo_use_cert").Where("bo_table = ?", boardSlug).Scan(&boUseCert).Error; err != nil || boUseCert == "" {
+		return ""
+	}
+	// bo_use_cert = 'cert': 실명인증 필수
+	if boUseCert == "cert" {
+		mbID := middleware.GetUserID(c)
+		var mbCertify string
+		if err := h.gnuDB.Table("g5_member").Select("mb_certify").Where("mb_id = ?", mbID).Scan(&mbCertify).Error; err != nil || mbCertify == "" {
+			return "이 게시판은 본인확인 하신 회원님만 이용 가능합니다. 회원정보 수정에서 본인확인을 해주시기 바랍니다."
+		}
+	}
+	return ""
+}
+
 // isOwnerOrAdmin checks if the current user is the owner of the resource or an admin
 func isOwnerOrAdmin(c *gin.Context, resourceUserID uint64) bool {
 	userID, err := strconv.ParseUint(middleware.GetUserID(c), 10, 64)
@@ -251,6 +288,12 @@ func (h *V2Handler) CreatePost(c *gin.Context) {
 	}
 	if userLevel < int(board.WriteLevel) {
 		common.V2ErrorResponse(c, http.StatusForbidden, "글쓰기 권한이 없습니다. 레벨 "+strconv.Itoa(int(board.WriteLevel))+" 이상이 필요합니다.", nil)
+		return
+	}
+
+	// 실명인증 체크
+	if certMsg := h.checkCertification(c, slug); certMsg != "" {
+		common.V2ErrorResponse(c, http.StatusForbidden, certMsg, nil)
 		return
 	}
 
@@ -608,6 +651,12 @@ func (h *V2Handler) CreateComment(c *gin.Context) {
 
 	if userLevel < int(board.CommentLevel) {
 		common.V2ErrorResponse(c, http.StatusForbidden, "댓글 작성 권한이 없습니다. 레벨 "+strconv.Itoa(int(board.CommentLevel))+" 이상이 필요합니다.", nil)
+		return
+	}
+
+	// 실명인증 체크
+	if certMsg := h.checkCertification(c, slug); certMsg != "" {
+		common.V2ErrorResponse(c, http.StatusForbidden, certMsg, nil)
 		return
 	}
 

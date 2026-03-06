@@ -44,6 +44,7 @@ type G5Board struct {
 	Bo8             string `gorm:"column:bo_8" json:"bo_8"`
 	Bo9             string `gorm:"column:bo_9" json:"bo_9"`
 	Bo10            string `gorm:"column:bo_10" json:"bo_10"`
+	BoUseCert       string `gorm:"column:bo_use_cert" json:"bo_use_cert"`
 }
 
 // TableName returns the table name for GORM
