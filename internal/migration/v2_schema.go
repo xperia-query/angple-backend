@@ -30,6 +30,9 @@ func RunV2Schema(db *gorm.DB) error {
 		// Content revisions
 		&v2.V2ContentRevision{},
 
+		// Board display settings - table already exists, skip auto-migration
+		// &v2.V2BoardDisplaySettings{},
+
 		// Meta tables (plugin extensibility)
 		&v2.UserMeta{},
 		&v2.PostMeta{},

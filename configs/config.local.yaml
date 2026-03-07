@@ -2,7 +2,7 @@
 # APP_ENV=local (기본값)
 
 server:
-  port: 8081
+  port: 8090
   mode: development
   env: local
 

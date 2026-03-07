@@ -2,7 +2,7 @@
 # APP_ENV=dev
 
 server:
-  port: 8081
+  port: 8090
   mode: development
   env: dev
 

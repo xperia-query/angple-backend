@@ -11,7 +11,7 @@ database:
   dbname: damoang
   max_idle_conns: 10
   max_open_conns: 100
-  conn_max_lifetime: 3600
+  conn_max_lifetime: 300
 
 redis:
   host: localhost

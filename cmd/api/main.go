@@ -258,6 +258,9 @@ func main() {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
 		if err := sqlDB.PingContext(ctx); err != nil {
+			// Stale connection 정리: idle 연결을 모두 닫아 다음 요청에서 새 연결 생성 유도
+			sqlDB.SetMaxIdleConns(0)
+			sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
 			c.JSON(http.StatusServiceUnavailable, gin.H{
 				"status":  "error",
 				"service": "angple-backend",
@@ -3692,8 +3695,14 @@ func initDB(cfg *config.Config) (*gorm.DB, error) {
 
 	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	sqlDB.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLifetime) * time.Second)
-	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
+	// ConnMaxLifetime: 풀에서 연결 최대 수명. 짧을수록 stale connection 위험 감소.
+	// k3s 재시작 등으로 TCP 끊김 시 빠른 복구를 위해 5분 권장.
+	connMaxLifetime := time.Duration(cfg.Database.ConnMaxLifetime) * time.Second
+	if connMaxLifetime > 5*time.Minute {
+		connMaxLifetime = 5 * time.Minute
+	}
+	sqlDB.SetConnMaxLifetime(connMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(2 * time.Minute)
 
 	return db, nil
 }
