@@ -36,6 +36,7 @@ import (
 	"github.com/damoang/angple-backend/internal/ws"
 	pkgcache "github.com/damoang/angple-backend/pkg/cache"
 	pkges "github.com/damoang/angple-backend/pkg/elasticsearch"
+	pkgsphinx "github.com/damoang/angple-backend/pkg/sphinx"
 	"github.com/damoang/angple-backend/pkg/i18n"
 	"github.com/damoang/angple-backend/pkg/jwt"
 	pkglogger "github.com/damoang/angple-backend/pkg/logger"
@@ -318,9 +319,23 @@ func main() {
 		v2UserRepo := v2repo.NewUserRepository(db)
 		siteRepo := repository.NewSiteRepository(db)
 
+		// Sphinx full-text search (SphinxQL on port 9306)
+		var sphinxClient *pkgsphinx.Client
+		if sc, err := pkgsphinx.New("127.0.0.1", 9306); err != nil {
+			pkglogger.Info("Sphinx unavailable, falling back to MySQL LIKE: %v", err)
+		} else {
+			sphinxClient = sc
+			pkglogger.Info("Sphinx connected (127.0.0.1:9306)")
+		}
+
 		// Gnuboard repositories for v1 API (g5_* tables)
 		gnuBoardRepo := gnurepo.NewBoardRepository(db)
-		gnuWriteRepo := gnurepo.NewWriteRepository(db)
+		var gnuWriteRepo gnurepo.WriteRepository
+		if sphinxClient != nil {
+			gnuWriteRepo = gnurepo.NewWriteRepositoryWithSphinx(db, sphinxClient)
+		} else {
+			gnuWriteRepo = gnurepo.NewWriteRepository(db)
+		}
 		gnuFileRepo := gnurepo.NewFileRepository(db)
 		gnuMemberRepo := gnurepo.NewMemberRepository(db)
 

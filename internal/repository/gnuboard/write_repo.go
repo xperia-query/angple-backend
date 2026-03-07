@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/damoang/angple-backend/internal/domain/gnuboard"
+	"github.com/damoang/angple-backend/pkg/sphinx"
 	"gorm.io/gorm"
 )
 
@@ -78,12 +79,18 @@ type WriteRepository interface {
 }
 
 type writeRepository struct {
-	db *gorm.DB
+	db     *gorm.DB
+	sphinx *sphinx.Client
 }
 
 // NewWriteRepository creates a new Gnuboard WriteRepository
 func NewWriteRepository(db *gorm.DB) WriteRepository {
 	return &writeRepository{db: db}
+}
+
+// NewWriteRepositoryWithSphinx creates a WriteRepository with Sphinx search support.
+func NewWriteRepositoryWithSphinx(db *gorm.DB, sphinxClient *sphinx.Client) WriteRepository {
+	return &writeRepository{db: db, sphinx: sphinxClient}
 }
 
 // tableName generates the dynamic table name for a board
@@ -262,55 +269,57 @@ func (r *writeRepository) SearchPostsFiltered(boardID string, searchField, searc
 	return posts, total, err
 }
 
-// SearchPosts retrieves posts matching search criteria (sfl/stx) with pagination
+// SearchPosts retrieves posts matching search criteria (sfl/stx) with pagination.
+// Uses Sphinx full-text search when available, falls back to MySQL LIKE.
 func (r *writeRepository) SearchPosts(boardID string, searchField, searchQuery string, page, limit int) ([]*gnuboard.G5Write, int64, error) {
+	// Try Sphinx first
+	if r.sphinx != nil {
+		result, err := r.sphinx.Search(boardID, searchField, searchQuery, page, limit)
+		if err == nil && result != nil {
+			if len(result.IDs) == 0 {
+				return nil, result.TotalFound, nil
+			}
+			// Fetch full post data from MySQL by IDs (preserving Sphinx order)
+			var posts []*gnuboard.G5Write
+			table := tableName(boardID)
+			if err := r.db.Table(table).
+				Select(coreColumns).
+				Where("wr_id IN ? AND wr_deleted_at IS NULL", result.IDs).
+				Find(&posts).Error; err != nil {
+				return nil, 0, err
+			}
+			// Reorder posts to match Sphinx result order
+			postMap := make(map[int]*gnuboard.G5Write, len(posts))
+			for _, p := range posts {
+				postMap[p.WrID] = p
+			}
+			ordered := make([]*gnuboard.G5Write, 0, len(result.IDs))
+			for _, id := range result.IDs {
+				if p, ok := postMap[id]; ok {
+					ordered = append(ordered, p)
+				}
+			}
+			return ordered, result.TotalFound, nil
+		}
+		// Sphinx error: fall through to MySQL LIKE
+	}
+
+	// Fallback: MySQL LIKE search
 	var posts []*gnuboard.G5Write
 	var total int64
 
 	offset := (page - 1) * limit
 	table := tableName(boardID)
 
-	// Build search condition based on field
-	var searchCond string
-	var searchArgs []interface{}
-	likeQuery := "%" + searchQuery + "%"
-
-	switch searchField {
-	case "title":
-		searchCond = "wr_subject LIKE ?"
-		searchArgs = []interface{}{likeQuery}
-	case "content":
-		searchCond = "wr_content LIKE ?"
-		searchArgs = []interface{}{likeQuery}
-	case "title_content":
-		searchCond = "(wr_subject LIKE ? OR wr_content LIKE ?)"
-		searchArgs = []interface{}{likeQuery, likeQuery}
-	case "author":
-		searchCond = "(wr_name LIKE ? OR mb_id LIKE ?)"
-		searchArgs = []interface{}{likeQuery, likeQuery}
-	default:
-		searchCond = "(wr_subject LIKE ? OR wr_content LIKE ?)"
-		searchArgs = []interface{}{likeQuery, likeQuery}
-	}
-
+	searchCond, searchArgs := buildSearchCondition(searchField, searchQuery)
 	baseCond := "wr_is_comment = 0 AND wr_deleted_at IS NULL AND " + searchCond
 	baseArgs := searchArgs
 
-	// Count
 	if err := r.db.Table(table).Where(baseCond, baseArgs...).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Order
-	orderClause := "wr_num, wr_reply"
-	now := time.Now()
-	if cached, ok := sortFieldCache.Load(boardID); ok {
-		if entry, valid := cached.(*cachedSortField); valid && now.Before(entry.expiresAt) {
-			if entry.field != "" {
-				orderClause = entry.field
-			}
-		}
-	}
+	orderClause := r.getSortField(boardID)
 
 	err := r.db.Table(table).
 		Select(coreColumns).

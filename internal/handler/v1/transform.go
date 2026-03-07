@@ -170,6 +170,7 @@ func TransformToV1Board(b *gnuboard.G5Board) map[string]any {
 		"use_good":       b.BoUseGood == 1,
 		"use_nogood":     b.BoUseNogood == 1,
 		"use_secret":     b.BoUseSecret > 0,
+		"use_sns":        b.BoUseSns,
 		"post_count":     b.BoCountWrite,
 		"comment_count":  b.BoCountComment,
 	}
