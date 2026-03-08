@@ -1360,7 +1360,11 @@ func main() {
 				posts, total, err = gnuWriteRepo.FindPosts(slug, page, limit)
 			}
 			if err != nil {
-				c.JSON(http.StatusOK, gin.H{"success": true, "data": []any{}, "meta": gin.H{"total": 0, "page": page, "limit": limit}})
+				if isSearching {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": err.Error()})
+				} else {
+					c.JSON(http.StatusOK, gin.H{"success": true, "data": []any{}, "meta": gin.H{"total": 0, "page": page, "limit": limit}})
+				}
 				return
 			}
 

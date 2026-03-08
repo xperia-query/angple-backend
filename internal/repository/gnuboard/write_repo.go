@@ -277,103 +277,100 @@ func (r *writeRepository) FindPostsFiltered(boardID string, page, limit int, exc
 }
 
 // SearchPostsFiltered retrieves posts matching search criteria excluding specified members.
-// Search count is not cached (results vary by query), but NOT IN filter adds negligible overhead.
+// Uses Sphinx for search, then filters out excluded members from results.
 func (r *writeRepository) SearchPostsFiltered(boardID string, searchField, searchQuery string, page, limit int, excludeMbIDs []string) ([]*gnuboard.G5Write, int64, error) {
 	if len(excludeMbIDs) == 0 {
 		return r.SearchPosts(boardID, searchField, searchQuery, page, limit)
 	}
 
+	// Sphinx로 검색 후 차단 유저 필터링
+	if r.sphinx == nil {
+		return nil, 0, fmt.Errorf("검색 서비스를 일시적으로 사용할 수 없습니다")
+	}
+
+	// 차단 유저 필터를 위해 여유분 조회 (최대 2배)
+	result, err := r.sphinx.Search(boardID, searchField, searchQuery, page, limit*2)
+	if err != nil {
+		return nil, 0, fmt.Errorf("검색 서비스 오류: %w", err)
+	}
+	if result == nil || len(result.IDs) == 0 {
+		var total int64
+		if result != nil {
+			total = result.TotalFound
+		}
+		return nil, total, nil
+	}
+
+	// Fetch full post data and filter excluded members
 	var posts []*gnuboard.G5Write
-	var total int64
-	offset := (page - 1) * limit
 	table := tableName(boardID)
-
-	searchCond, searchArgs := buildSearchCondition(searchField, searchQuery)
-
-	// Count without NOT IN (search already narrows results significantly)
-	countCond := "wr_is_comment = 0 AND " + searchCond
-	if err := r.db.Table(table).Where(countCond, searchArgs...).Count(&total).Error; err != nil {
+	if err := r.db.Table(table).
+		Select(coreColumns).
+		Where("wr_id IN ? AND mb_id NOT IN ?", result.IDs, excludeMbIDs).
+		Find(&posts).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// SELECT with NOT IN filter
-	selectCond := "wr_is_comment = 0 AND mb_id NOT IN ? AND " + searchCond
-	selectArgs := append([]interface{}{excludeMbIDs}, searchArgs...)
+	// Reorder posts to match Sphinx result order
+	postMap := make(map[int]*gnuboard.G5Write, len(posts))
+	for _, p := range posts {
+		postMap[p.WrID] = p
+	}
+	ordered := make([]*gnuboard.G5Write, 0, len(result.IDs))
+	for _, id := range result.IDs {
+		if p, ok := postMap[id]; ok {
+			ordered = append(ordered, p)
+		}
+	}
 
-	orderClause := r.getSortField(boardID)
+	// limit 적용
+	if len(ordered) > limit {
+		ordered = ordered[:limit]
+	}
 
-	err := r.db.Table(table).
-		Select(coreColumns).
-		Where(selectCond, selectArgs...).
-		Order(orderClause).
-		Offset(offset).
-		Limit(limit).
-		Find(&posts).Error
-
-	return posts, total, err
+	return ordered, result.TotalFound, nil
 }
 
 // SearchPosts retrieves posts matching search criteria (sfl/stx) with pagination.
-// Uses Sphinx full-text search when available, falls back to MySQL LIKE.
+// Requires Sphinx full-text search. Returns error if Sphinx is unavailable.
 func (r *writeRepository) SearchPosts(boardID string, searchField, searchQuery string, page, limit int) ([]*gnuboard.G5Write, int64, error) {
-	// Try Sphinx first
-	if r.sphinx != nil {
-		result, err := r.sphinx.Search(boardID, searchField, searchQuery, page, limit)
-		if err == nil && result != nil {
-			if len(result.IDs) == 0 {
-				return nil, result.TotalFound, nil
-			}
-			// Fetch full post data from MySQL by IDs (preserving Sphinx order)
-			var posts []*gnuboard.G5Write
-			table := tableName(boardID)
-			if err := r.db.Table(table).
-				Select(coreColumns).
-				Where("wr_id IN ?", result.IDs).
-				Find(&posts).Error; err != nil {
-				return nil, 0, err
-			}
-			// Reorder posts to match Sphinx result order
-			postMap := make(map[int]*gnuboard.G5Write, len(posts))
-			for _, p := range posts {
-				postMap[p.WrID] = p
-			}
-			ordered := make([]*gnuboard.G5Write, 0, len(result.IDs))
-			for _, id := range result.IDs {
-				if p, ok := postMap[id]; ok {
-					ordered = append(ordered, p)
-				}
-			}
-			return ordered, result.TotalFound, nil
-		}
-		// Sphinx error: fall through to MySQL LIKE
+	if r.sphinx == nil {
+		return nil, 0, fmt.Errorf("검색 서비스를 일시적으로 사용할 수 없습니다")
 	}
 
-	// Fallback: MySQL LIKE search
+	result, err := r.sphinx.Search(boardID, searchField, searchQuery, page, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("검색 서비스 오류: %w", err)
+	}
+	if result == nil || len(result.IDs) == 0 {
+		var total int64
+		if result != nil {
+			total = result.TotalFound
+		}
+		return nil, total, nil
+	}
+
+	// Fetch full post data from MySQL by IDs (preserving Sphinx order)
 	var posts []*gnuboard.G5Write
-	var total int64
-
-	offset := (page - 1) * limit
 	table := tableName(boardID)
-
-	searchCond, searchArgs := buildSearchCondition(searchField, searchQuery)
-	baseCond := "wr_is_comment = 0 AND " + searchCond
-	baseArgs := searchArgs
-
-	if err := r.db.Table(table).Where(baseCond, baseArgs...).Count(&total).Error; err != nil {
+	if err := r.db.Table(table).
+		Select(coreColumns).
+		Where("wr_id IN ?", result.IDs).
+		Find(&posts).Error; err != nil {
 		return nil, 0, err
 	}
-
-	orderClause := r.getSortField(boardID)
-
-	err := r.db.Table(table).
-		Select(coreColumns).
-		Where(baseCond, baseArgs...).
-		Order(orderClause).
-		Offset(offset).
-		Limit(limit).
-		Find(&posts).Error
-
-	return posts, total, err
+	// Reorder posts to match Sphinx result order
+	postMap := make(map[int]*gnuboard.G5Write, len(posts))
+	for _, p := range posts {
+		postMap[p.WrID] = p
+	}
+	ordered := make([]*gnuboard.G5Write, 0, len(result.IDs))
+	for _, id := range result.IDs {
+		if p, ok := postMap[id]; ok {
+			ordered = append(ordered, p)
+		}
+	}
+	return ordered, result.TotalFound, nil
 }
 
 // FindPostByID retrieves a single post by ID (excludes soft deleted)
