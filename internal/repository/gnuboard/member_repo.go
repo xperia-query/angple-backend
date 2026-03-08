@@ -2,6 +2,7 @@ package gnuboard
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/damoang/angple-backend/internal/domain/gnuboard"
 	"gorm.io/gorm"
@@ -18,6 +19,8 @@ type MemberRepository interface {
 	Update(member *gnuboard.G5Member) error
 	UpdatePassword(mbID string, hashedPassword string) error
 	Count() (int64, error)
+	UpdateMemberImageUrl(mbID, imageUrl string) error
+	ClearMemberImageUrl(mbID string) error
 }
 
 type memberRepository struct {
@@ -134,4 +137,28 @@ func (r *memberRepository) Count() (int64, error) {
 		Where("mb_intercept_date = ''").
 		Count(&count).Error
 	return count, err
+}
+
+// UpdateMemberImageUrl sets the member's profile image URL
+func (r *memberRepository) UpdateMemberImageUrl(mbID, imageUrl string) error {
+	one := 1
+	return r.db.Model(&gnuboard.G5Member{}).
+		Where("mb_id = ?", mbID).
+		Updates(map[string]interface{}{
+			"mb_image_url":        imageUrl,
+			"mb_image_exists":     &one,
+			"mb_image_updated_at": time.Now(),
+		}).Error
+}
+
+// ClearMemberImageUrl removes the member's profile image URL
+func (r *memberRepository) ClearMemberImageUrl(mbID string) error {
+	zero := 0
+	return r.db.Model(&gnuboard.G5Member{}).
+		Where("mb_id = ?", mbID).
+		Updates(map[string]interface{}{
+			"mb_image_url":        "",
+			"mb_image_exists":     &zero,
+			"mb_image_updated_at": time.Now(),
+		}).Error
 }

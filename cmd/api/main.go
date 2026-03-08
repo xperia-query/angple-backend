@@ -3735,6 +3735,13 @@ func main() {
 			media.POST("/attachments", mediaHandler.UploadAttachment)
 			media.POST("/videos", mediaHandler.UploadVideo)
 			media.DELETE("/files", mediaHandler.DeleteFile)
+
+			// Member profile image
+			memberSvc := service.NewMemberService(s3Client, gnuMemberRepo)
+			memberHandler := handler.NewMemberHandler(memberSvc)
+			memberImage := router.Group("/api/v2/members/me", middleware.JWTAuth(jwtManager))
+			memberImage.POST("/image", memberHandler.UploadImage)
+			memberImage.DELETE("/image", memberHandler.DeleteImage)
 		}
 
 		// WebSocket
