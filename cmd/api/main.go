@@ -3619,7 +3619,7 @@ func main() {
 		v2routes.SetupBanner(router, v2handler.NewBannerHandler(bannerRepo))
 
 		promotionRepo := v2repo.NewPromotionRepository(db)
-		v2routes.SetupPromotion(router, v2handler.NewPromotionHandler(promotionRepo))
+		v2routes.SetupPromotion(router, v2handler.NewPromotionHandler(promotionRepo, redisClient))
 
 		v2routes.SetupLicense(router, v2handler.NewLicenseHandler())
 
