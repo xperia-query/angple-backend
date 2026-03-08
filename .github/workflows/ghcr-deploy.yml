@@ -4,18 +4,28 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/angple-backend
+  ECR_REGISTRY: 891376997084.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPOSITORY: angple-backend
+  AWS_REGION: ap-northeast-2
 
 jobs:
-  build-and-push:
+  # ──────────────────────────────────────────────
+  # 1단계: 빌드 + 테스트 → GHCR + ECR push (자동)
+  # ──────────────────────────────────────────────
+  build:
     name: Build & Push
     runs-on: ubuntu-24.04-arm
     permissions:
+      id-token: write
       contents: read
       packages: write
+    outputs:
+      image-tag: ${{ steps.tags.outputs.sha_tag }}
 
     steps:
       - name: Checkout code
@@ -51,6 +61,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::891376997084:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tags
+        id: tags
+        run: |
+          SHA_TAG="sha-${GITHUB_SHA}"
+          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push API
         uses: docker/build-push-action@v6
         with:
@@ -58,42 +83,129 @@ jobs:
           file: deployments/docker/api.Dockerfile
           push: true
           platforms: linux/arm64
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:latest
+          tags: |
+            ${{ env.IMAGE_NAME }}-api:${{ steps.tags.outputs.sha_tag }}
+            ${{ env.IMAGE_NAME }}-api:latest
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.tags.outputs.sha_tag }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
           cache-from: type=gha,scope=ghcr-api
           cache-to: type=gha,mode=max,scope=ghcr-api
 
-      - name: Build and push Gateway
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deployments/docker/gateway.Dockerfile
-          push: true
-          platforms: linux/arm64
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-gateway:latest
-          cache-from: type=gha,scope=ghcr-gateway
-          cache-to: type=gha,mode=max,scope=ghcr-gateway
+      - name: Build summary
+        run: |
+          echo "### Build Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GHCR: \`${{ env.IMAGE_NAME }}-api:${{ steps.tags.outputs.sha_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ECR: \`${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.tags.outputs.sha_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
 
-  deploy:
-    name: Deploy to Dev Server
-    needs: build-and-push
+  # ──────────────────────────────────────────────
+  # 2단계: 빌드 완료 알림 + 승인 대기 (자동)
+  # ──────────────────────────────────────────────
+  notify:
+    name: Notify & Wait for Approval
+    needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: staging
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.5
+      - uses: actions/checkout@v6
+
+      - name: Notify Telegram (승인 요청)
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+        run: |
+          COMMIT_MSG=$(echo "${{ github.event.head_commit.message }}" | head -1)
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MSG="✅ 백엔드 빌드+테스트 통과 — 승인 대기 중
+
+          ${COMMIT_MSG}
+          Tag: ${IMAGE_TAG}
+
+          👉 승인하기: ${RUN_URL}"
+
+          MSG=$(echo "$MSG" | sed 's/^          //')
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            --data-urlencode "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || true
+
+      - name: Notify summary
+        run: |
+          echo "### Notify Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag: \`${{ needs.build.outputs.image-tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 텔레그램 알림 전송 → 프로덕션 승인 대기 중" >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────
+  # 3단계: 프로덕션 배포 (승인 후)
+  # ──────────────────────────────────────────────
+  deploy-production:
+    name: Production Deploy
+    needs: [build, notify]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          host: ${{ secrets.DEV_SERVER_HOST }}
-          username: ${{ secrets.DEV_SERVER_USER }}
-          key: ${{ secrets.DEV_SERVER_SSH_KEY }}
-          script: |
-            cd /home/angple/deploy
+          role-to-assume: arn:aws:iam::891376997084:role/GitHubActionsDeployRole
+          aws-region: ${{ env.AWS_REGION }}
 
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Deploy via SSM
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+        run: |
+          echo "Production deploy with tag: $IMAGE_TAG"
 
-            docker pull ghcr.io/damoang/angple-backend-api:latest
-            docker pull ghcr.io/damoang/angple-backend-gateway:latest
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "i-038a1d1f00798d94b" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "commands=[
+              \"/home/angple/k8s/prod/deploy.sh backend $IMAGE_TAG\"
+            ]" \
+            --timeout-seconds 300 \
+            --query "Command.CommandId" \
+            --output text)
 
-            docker compose up -d api gateway
-            docker image prune -f
+          echo "SSM Command: $COMMAND_ID"
 
-            echo "Deployed at $(date)"
+          for i in $(seq 1 30); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "i-038a1d1f00798d94b" \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+
+            if [ "$STATUS" = "Success" ]; then
+              echo "Production deploy complete!"
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "i-038a1d1f00798d94b" \
+                --query "StandardOutputContent" \
+                --output text
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Deploy failed: $STATUS"
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "i-038a1d1f00798d94b" \
+                --query "StandardErrorContent" \
+                --output text
+              exit 1
+            fi
+
+            sleep 10
+          done
+          echo "Timed out"
+          exit 1
+
+      - name: Deploy summary
+        run: |
+          echo "### Production Deploy Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag: \`${{ needs.build.outputs.image-tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 전체 Pod 롤링 업데이트 완료" >> "$GITHUB_STEP_SUMMARY"
