@@ -209,3 +209,20 @@ jobs:
           echo "### Production Deploy Complete" >> "$GITHUB_STEP_SUMMARY"
           echo "- Tag: \`${{ needs.build.outputs.image-tag }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- 전체 Pod 롤링 업데이트 완료" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify deploy complete (Telegram)
+        if: success()
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          COMMIT_MSG=$(git log -1 --pretty=format:'%s')
+
+          MSG="🚀 angple-backend 배포 완료
+
+          커밋: ${SHORT_SHA} - ${COMMIT_MSG}
+          Tag: ${IMAGE_TAG}"
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            --data-urlencode "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || true
