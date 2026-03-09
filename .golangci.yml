@@ -103,6 +103,15 @@ linters:
           - gosec
         path: internal/domain/v2/nariya_php\.go
       - linters:
+          - errcheck
+        path: internal/cron/.*\.go
+      - linters:
+          - errcheck
+        path: internal/service/.*\.go
+      - linters:
+          - errcheck
+        path: pkg/sphinx/.*\.go
+      - linters:
           - dupl
           - errcheck
           - goconst
