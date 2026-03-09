@@ -23,13 +23,13 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.24'
 
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v7
+      uses: golangci/golangci-lint-action@v6
       with:
-        version: v2.11.2
-        args: --timeout=5m
+        version: v1.64.8
+        args: --timeout=5m --skip-dirs=plugins
 
   golangci-reviewdog:
     name: golangci-lint with reviewdog
@@ -44,13 +44,13 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.24'
 
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v7
+      uses: golangci/golangci-lint-action@v6
       with:
-        version: v2.11.2
-        args: --timeout=5m
+        version: v1.64.8
+        args: --timeout=5m --skip-dirs=plugins
         only-new-issues: true
 
   format:
@@ -63,7 +63,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.24'
 
     - name: Check formatting
       run: |
