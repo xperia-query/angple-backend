@@ -1,6 +1,6 @@
 module github.com/damoang/angple-backend
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.43.0
