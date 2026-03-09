@@ -467,36 +467,19 @@ func (r *writeRepository) SoftDeletePost(boardID string, wrID int, deletedBy str
 		}
 	}
 
-	// Soft delete the post
-	if err := r.db.Table(table).Where("wr_id = ?", wrID).Updates(map[string]interface{}{
-		"wr_deleted_at": now,
-		"wr_deleted_by": deletedBy,
-	}).Error; err != nil {
-		return err
-	}
-
-	// Soft delete all comments for this post
-	return r.db.Table(table).Where("wr_parent = ? AND wr_is_comment = 1", wrID).Updates(map[string]interface{}{
+	// Soft delete the post only (comments are preserved)
+	return r.db.Table(table).Where("wr_id = ?", wrID).Updates(map[string]interface{}{
 		"wr_deleted_at": now,
 		"wr_deleted_by": deletedBy,
 	}).Error
 }
 
-// RestorePost restores a soft deleted post and its comments
+// RestorePost restores a soft deleted post (comments are not affected)
 func (r *writeRepository) RestorePost(boardID string, wrID int) error {
 	InvalidatePostCount(boardID)
 	table := tableName(boardID)
 
-	// Restore the post
-	if err := r.db.Table(table).Where("wr_id = ?", wrID).Updates(map[string]interface{}{
-		"wr_deleted_at": nil,
-		"wr_deleted_by": nil,
-	}).Error; err != nil {
-		return err
-	}
-
-	// Restore all comments for this post
-	return r.db.Table(table).Where("wr_parent = ?", wrID).Updates(map[string]interface{}{
+	return r.db.Table(table).Where("wr_id = ?", wrID).Updates(map[string]interface{}{
 		"wr_deleted_at": nil,
 		"wr_deleted_by": nil,
 	}).Error

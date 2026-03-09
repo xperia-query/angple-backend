@@ -2834,6 +2834,38 @@ func main() {
 			})
 		})
 
+		// POST /api/v1/boards/:slug/posts/:id/comments/:comment_id/restore - Restore soft deleted comment (admin only)
+		v1Boards.POST("/:slug/posts/:id/comments/:comment_id/restore", middleware.JWTAuth(jwtManager), func(c *gin.Context) {
+			slug := c.Param("slug")
+			commentID, err := strconv.Atoi(c.Param("comment_id"))
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "Invalid comment ID"})
+				return
+			}
+
+			// 관리자 확인
+			userLevel := middleware.GetUserLevel(c)
+			if userLevel < 10 {
+				c.JSON(http.StatusForbidden, gin.H{"success": false, "error": "관리자만 복구할 수 있습니다"})
+				return
+			}
+
+			// 댓글 복구
+			if err := gnuWriteRepo.RestoreComment(slug, commentID); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "댓글 복구 실패"})
+				return
+			}
+
+			// 캐시 무효화
+			postID, _ := strconv.Atoi(c.Param("id"))
+			if cacheService != nil {
+				_ = cacheService.InvalidateComments(c.Request.Context(), slug, postID)
+				_ = cacheService.InvalidatePosts(c.Request.Context(), slug)
+			}
+
+			c.JSON(http.StatusOK, gin.H{"success": true, "message": "댓글 복구 완료"})
+		})
+
 		// POST /api/v1/boards/:slug/posts/:id/cancel-delete - Cancel a scheduled delete
 		v1Boards.POST("/:slug/posts/:id/cancel-delete", middleware.JWTAuth(jwtManager), func(c *gin.Context) {
 			slug := c.Param("slug")
