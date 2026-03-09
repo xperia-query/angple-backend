@@ -102,7 +102,6 @@ func tableName(boardID string) string {
 	return fmt.Sprintf("g5_write_%s", boardID)
 }
 
-
 // getSortField returns the sort clause for a board (with caching)
 func (r *writeRepository) getSortField(boardID string) string {
 	orderClause := "wr_num, wr_reply"

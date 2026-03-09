@@ -529,4 +529,3 @@ func saveReportPost(db *gorm.DB, stats *reportStats, subject string, now time.Ti
 func getSingoTypes() map[int]string {
 	return reportTypeLabels
 }
-
