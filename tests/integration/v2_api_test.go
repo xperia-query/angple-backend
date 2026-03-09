@@ -38,8 +38,12 @@ func (s *V2APISuite) SetupSuite() {
 	gin.SetMode(gin.TestMode)
 
 	// Use SQLite for tests (no external DB dependency)
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	// Use shared cache mode to prevent "no such table" errors with multiple connections
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	s.Require().NoError(err)
+	sqlDB, err := db.DB()
+	s.Require().NoError(err)
+	sqlDB.SetMaxOpenConns(1)
 	s.db = db
 
 	// Migrate v2 schema (raw SQL for SQLite compatibility — no enum types)
