@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+bin
+docs
+logs
+deployments/docker
+*.md
+.env
+.env.*
+.gitignore
+.golangci.yml
+Makefile

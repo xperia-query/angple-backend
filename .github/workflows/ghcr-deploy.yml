@@ -208,7 +208,7 @@ jobs:
           echo "Timed out"
           exit 1
 
-      - name: Notify Telegram (승인 요청)
+      - name: Notify Telegram (카나리 통과)
         if: steps.deploy-canary.outputs.deploy_success == 'true'
         env:
           IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
@@ -226,7 +226,28 @@ jobs:
           MSG=$(echo "$MSG" | sed 's/^          //')
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            --data-urlencode "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --data-urlencode "chat_id=${{ secrets.TELEGRAM_DEPLOY_CHAT_ID }}" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || true
+
+      - name: Notify Telegram (카나리 실패)
+        if: failure()
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+        run: |
+          COMMIT_MSG=$(echo "${{ github.event.head_commit.message }}" | head -1)
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MSG="❌ 백엔드 카나리 배포 실패
+
+          ${COMMIT_MSG}
+          Tag: ${IMAGE_TAG}
+
+          로그: ${RUN_URL}"
+
+          MSG=$(echo "$MSG" | sed 's/^          //')
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            --data-urlencode "chat_id=${{ secrets.TELEGRAM_DEPLOY_CHAT_ID }}" \
             --data-urlencode "text=${MSG}" >/dev/null 2>&1 || true
 
       - name: Canary summary
@@ -309,7 +330,7 @@ jobs:
           echo "- Tag: \`${{ needs.build.outputs.image-tag }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- 전체 Pod 롤링 업데이트 완료" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Notify deploy complete (Telegram)
+      - name: Notify Telegram (배포 완료)
         if: success()
         env:
           IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
@@ -324,5 +345,26 @@ jobs:
           MSG=$(echo "$MSG" | sed 's/^          //')
 
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            --data-urlencode "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            --data-urlencode "chat_id=${{ secrets.TELEGRAM_DEPLOY_CHAT_ID }}" \
+            --data-urlencode "text=${MSG}" >/dev/null 2>&1 || true
+
+      - name: Notify Telegram (배포 실패)
+        if: failure()
+        env:
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
+        run: |
+          COMMIT_MSG=$(echo "${{ github.event.head_commit.message }}" | head -1)
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MSG="❌ angple-backend 배포 실패
+
+          커밋: ${GITHUB_SHA:0:7} - ${COMMIT_MSG}
+          Tag: ${IMAGE_TAG}
+
+          로그: ${RUN_URL}"
+
+          MSG=$(echo "$MSG" | sed 's/^          //')
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            --data-urlencode "chat_id=${{ secrets.TELEGRAM_DEPLOY_CHAT_ID }}" \
             --data-urlencode "text=${MSG}" >/dev/null 2>&1 || true
