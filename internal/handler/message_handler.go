@@ -248,7 +248,7 @@ func (h *V1MessageHandler) SendMessage(c *gin.Context) {
 			RelMbID:    mbID,
 			RelMbNick:  senderNick,
 			RelMsg:     fmt.Sprintf("%s님이 쪽지를 보냈습니다.", senderNick),
-			RelURL:     fmt.Sprintf("/member/messages/%d", memo.MeID),
+			RelURL:     "/messages",
 			PhReaded:   "N",
 			PhDatetime: time.Now(),
 		})

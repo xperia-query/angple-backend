@@ -392,6 +392,7 @@ func main() {
 		v2Handler.SetPointRepository(v2PointRepo)
 		v2Handler.SetRevisionRepository(v2RevisionRepo)
 		v2Handler.SetNotiRepository(gnurepo.NewNotiRepository(db))
+		v2Handler.SetNotiPreferenceRepository(gnurepo.NewNotiPreferenceRepository(db))
 		v2Handler.SetGnuDB(db)
 
 		// XP: DI into V2Handler (set after expRepo is created below)
