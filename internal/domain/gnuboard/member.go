@@ -64,6 +64,8 @@ type G5Member struct {
 	// 경험치/레벨 필드 (nariya 애드온)
 	AsExp   int `gorm:"column:as_exp" json:"as_exp"`
 	AsLevel int `gorm:"column:as_level" json:"as_level"`
+	// 서로 다른 날 로그인 횟수 (자동등업 조건용)
+	MbLoginDays int `gorm:"column:mb_login_days" json:"mb_login_days"`
 }
 
 // TableName returns the table name for GORM

@@ -82,6 +82,8 @@ type ExpRepository interface {
 	GetXPConfig() (*XPConfig, error)
 	// UpdateXPConfig updates the XP configuration
 	UpdateXPConfig(config *XPConfig) error
+	// IncrementLoginDays increments mb_login_days by 1
+	IncrementLoginDays(mbID string) error
 }
 
 type expRepository struct {
@@ -287,6 +289,13 @@ func (r *expRepository) ListMembersWithXP(search string, page, limit int) ([]Mem
 	}
 
 	return members, total, nil
+}
+
+// IncrementLoginDays increments mb_login_days by 1
+func (r *expRepository) IncrementLoginDays(mbID string) error {
+	return r.db.Model(&gnuboard.G5Member{}).
+		Where("mb_id = ?", mbID).
+		UpdateColumn("mb_login_days", gorm.Expr("mb_login_days + 1")).Error
 }
 
 const defaultSiteID = "default"

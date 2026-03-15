@@ -123,6 +123,11 @@ func (s *V2AuthService) grantLoginXP(username string) {
 	if _, addErr := s.expRepo.AddExp(username, xpConfig.LoginXP, today+" 로그인", "@login", username, today); addErr != nil {
 		log.Printf("[v2-auth] login XP grant failed for user %s: %v", username, addErr)
 	}
+
+	// 서로 다른 날 로그인 횟수 증가 (자동등업 조건)
+	if err := s.expRepo.IncrementLoginDays(username); err != nil {
+		log.Printf("[v2-auth] login days increment failed for user %s: %v", username, err)
+	}
 }
 
 // RefreshToken validates a refresh token and issues new token pair

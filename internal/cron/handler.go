@@ -136,3 +136,21 @@ func (h *Handler) UpdateReportPattern(c *gin.Context) {
 	log.Printf("[Cron:update-report-pattern] report generated: %s", result.Subject)
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
 }
+
+// AutoPromote handles POST /api/internal/cron/auto-promote
+// Promotes members from mb_level 2 to 3 when conditions are met
+func (h *Handler) AutoPromote(c *gin.Context) {
+	if !h.verifySecret(c) {
+		return
+	}
+
+	result, err := runAutoPromote(h.db, h.notiRepo)
+	if err != nil {
+		log.Printf("[Cron:auto-promote] error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": err.Error()})
+		return
+	}
+
+	log.Printf("[Cron:auto-promote] promoted %d members: %v", result.PromotedCount, result.PromotedIDs)
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+}

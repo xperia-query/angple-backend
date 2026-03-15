@@ -4262,6 +4262,7 @@ func main() {
 		cronGroup.POST("/discipline-release", cronHandler.DisciplineRelease)
 		cronGroup.POST("/point-expiry", cronHandler.PointExpiry)
 		cronGroup.POST("/point-expiry-notify", cronHandler.PointExpiryNotify)
+		cronGroup.POST("/auto-promote", cronHandler.AutoPromote)
 
 		// Start delete worker for delayed deletion processing
 		deleteWorker := worker.NewDeleteWorker(gnuWriteRepo, scheduledDeleteRepo)
