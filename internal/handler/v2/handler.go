@@ -422,7 +422,7 @@ func (h *V2Handler) CreatePost(c *gin.Context) {
 		BoardID:  board.ID,
 		UserID:   userID,
 		Title:    req.Title,
-		Content:  req.Content,
+		Content:  common.SanitizePostContent(req.Content),
 		Status:   "published",
 		IsSecret: req.IsSecret != nil && *req.IsSecret,
 	}
@@ -524,7 +524,7 @@ func (h *V2Handler) UpdatePost(c *gin.Context) {
 		post.Title = req.Title
 	}
 	if req.Content != "" {
-		post.Content = req.Content
+		post.Content = common.SanitizePostContent(req.Content)
 	}
 	if err := h.postRepo.Update(post); err != nil {
 		common.V2ErrorResponse(c, http.StatusInternalServerError, "게시글 수정 실패", err)
@@ -835,7 +835,7 @@ func (h *V2Handler) CreateComment(c *gin.Context) {
 		PostID:   postID,
 		UserID:   userID,
 		ParentID: req.ParentID,
-		Content:  req.Content,
+		Content:  common.SanitizeComment(req.Content),
 		Status:   "active",
 	}
 	if req.ParentID != nil {
@@ -955,7 +955,7 @@ func (h *V2Handler) UpdateComment(c *gin.Context) {
 		return
 	}
 
-	comment.Content = req.Content
+	comment.Content = common.SanitizeComment(req.Content)
 	if err := h.commentRepo.Update(comment); err != nil {
 		common.V2ErrorResponse(c, http.StatusInternalServerError, "댓글 수정 실패", err)
 		return
