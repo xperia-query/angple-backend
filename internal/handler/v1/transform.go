@@ -24,9 +24,11 @@ func init() {
 	if cdnURL != "" {
 		if parsed, err := url.Parse(cdnURL); err == nil {
 			host := regexp.QuoteMeta(parsed.Host)
+			// cdn.damoang.net 레거시 URL도 매칭 (에디터 업로드 시점에 따라 도메인이 다름)
+			hostPattern := "(?:" + host + "|cdn\\.damoang\\.net)"
 			// GIF 제외: 애니메이션 손실 방지
-			thumbnailRegex = regexp.MustCompile(`(?i)^(https?://` + host + `/data/(?:file|editor)/.+)\.(jpg|jpeg|png|webp)$`)
-			imgTagSrcRegex = regexp.MustCompile(`(<img\s[^>]*?src=)(["'])(https?://` + host + `/data/(?:file|editor)/.+?\.(?:jpg|jpeg|png|webp))(["'])`)
+			thumbnailRegex = regexp.MustCompile(`(?i)^(https?://` + hostPattern + `/data/(?:file|editor)/.+)\.(jpg|jpeg|png|webp)$`)
+			imgTagSrcRegex = regexp.MustCompile(`(<img\s[^>]*?src=)(["'])(https?://` + hostPattern + `/data/(?:file|editor)/.+?\.(?:jpg|jpeg|png|webp))(["'])`)
 		}
 	}
 }
@@ -63,7 +65,7 @@ func optimizeContentImages(html string) string {
 		imgPrefix := parts[1] // <img ... src=
 		quote := parts[2]     // " or '
 		originalURL := parts[3]
-		thumbURL := toThumbnailURL(originalURL, "835x626")
+		thumbURL := toThumbnailURL(originalURL, "1200x900")
 		if thumbURL == originalURL {
 			return match
 		}
@@ -132,13 +134,18 @@ func normalizeMediaURL(raw string) string {
 	return raw
 }
 
-func normalizeMediaContent(raw string) string {
+func normalizeMediaContent(raw string, boardID ...string) string {
 	cdnURL := strings.TrimRight(os.Getenv("CDN_URL"), "/")
 	if raw == "" {
 		return raw
 	}
 
+	skipThumbnail := len(boardID) > 0 && boardID[0] == "promotion"
+
 	if cdnURL == "" {
+		if skipThumbnail {
+			return raw
+		}
 		return optimizeContentImages(raw)
 	}
 
@@ -161,6 +168,9 @@ func normalizeMediaContent(raw string) string {
 		`href='data/`, `href='`+cdnURL+`/data/`,
 	)
 	result := replacer.Replace(raw)
+	if skipThumbnail {
+		return result
+	}
 	return optimizeContentImages(result)
 }
 
@@ -247,9 +257,9 @@ func TransformToV1Post(w *gnuboard.G5Write, isNotice bool) map[string]any {
 }
 
 // TransformToV1PostDetail converts G5Write to detailed v1 API response format
-func TransformToV1PostDetail(w *gnuboard.G5Write, isNotice bool) map[string]any {
+func TransformToV1PostDetail(w *gnuboard.G5Write, isNotice bool, boardID ...string) map[string]any {
 	result := TransformToV1Post(w, isNotice)
-	result["content"] = normalizeMediaContent(w.WrContent)
+	result["content"] = normalizeMediaContent(w.WrContent, boardID...)
 	if w.Wr9 != "" {
 		result["extra_9"] = w.Wr9
 	}
