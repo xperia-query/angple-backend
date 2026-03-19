@@ -377,6 +377,14 @@ func filterItems(items []map[string]any, blockedIDs []string) []map[string]any {
 	return filtered
 }
 
+// safeIntToUint64 converts int to uint64, clamping negative values to 0.
+func safeIntToUint64(v int) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v) // #nosec G115 -- IDs are always non-negative
+}
+
 func main() {
 	dotenvFiles := config.LoadDotEnv()
 
@@ -2355,6 +2363,24 @@ func main() {
 			phaseDurations["insert"] = time.Since(phaseStart)
 			phaseStart = time.Now()
 
+			// 리비전 저장 (최초 작성) — 양쪽 테이블 모두 기록
+			db.Exec(`INSERT INTO g5_write_revisions
+				(board_id, wr_id, version, change_type, title, content, edited_by, edited_by_name, edited_at)
+				VALUES (?, ?, 1, 'create', ?, ?, ?, ?, NOW())`,
+				slug, post.WrID, post.WrSubject, post.WrContent, mbID, post.WrName)
+			if v2RevisionRepo != nil {
+				userIDUint, _ := strconv.ParseUint(mbID, 10, 64)
+				_ = v2RevisionRepo.Create(&v2domain.V2ContentRevision{
+					PostID:       safeIntToUint64(post.WrID),
+					Version:      1,
+					ChangeType:   "create",
+					Title:        post.WrSubject,
+					Content:      post.WrContent,
+					EditedBy:     userIDUint,
+					EditedByName: post.WrName,
+				})
+			}
+
 			// 태그 저장 (g5_na_tag / g5_na_tag_log)
 			if len(req.Tags) > 0 {
 				if err := gnuTagRepo.SetPostTags(slug, post.WrID, req.Tags, mbID); err != nil {
@@ -2610,6 +2636,23 @@ func main() {
 			}
 			comment := createdComment
 
+			// 리비전 저장 (댓글 최초 작성) — 양쪽 테이블 모두 기록
+			db.Exec(`INSERT INTO g5_write_revisions
+				(board_id, wr_id, version, change_type, title, content, edited_by, edited_by_name, edited_at)
+				VALUES (?, ?, 1, 'create', NULL, ?, ?, ?, NOW())`,
+				slug, createdComment.WrID, createdComment.WrContent, mbID, authorName)
+			if v2RevisionRepo != nil {
+				userIDUint, _ := strconv.ParseUint(mbID, 10, 64)
+				_ = v2RevisionRepo.Create(&v2domain.V2ContentRevision{
+					PostID:       safeIntToUint64(createdComment.WrID),
+					Version:      1,
+					ChangeType:   "create",
+					Content:      createdComment.WrContent,
+					EditedBy:     userIDUint,
+					EditedByName: authorName,
+				})
+			}
+
 			// 포인트 처리 (g5_point 기반 FIFO 소비)
 			if board.BoCommentPoint != 0 {
 				var pc *v2repo.PointConfig
@@ -2700,13 +2743,27 @@ func main() {
 				return
 			}
 
-			// 수정 전 내용을 리비전에 저장
+			// 수정 전 내용을 리비전에 저장 — 양쪽 테이블 모두 기록
 			var nextVersion int
 			db.Raw("SELECT COALESCE(MAX(version), 0) + 1 FROM g5_write_revisions WHERE board_id = ? AND wr_id = ?", slug, postID).Scan(&nextVersion)
 			db.Exec(`INSERT INTO g5_write_revisions
 				(board_id, wr_id, version, change_type, title, content, edited_by, edited_by_name, edited_at)
 				VALUES (?, ?, ?, 'update', ?, ?, ?, ?, NOW())`,
 				slug, postID, nextVersion, post.WrSubject, post.WrContent, userID, post.WrName)
+			if v2RevisionRepo != nil {
+				userIDUint, _ := strconv.ParseUint(userID, 10, 64)
+				nickname := middleware.GetNickname(c)
+				v2NextVer, _ := v2RevisionRepo.GetNextVersion(safeIntToUint64(postID))
+				_ = v2RevisionRepo.Create(&v2domain.V2ContentRevision{
+					PostID:       safeIntToUint64(postID),
+					Version:      v2NextVer,
+					ChangeType:   "update",
+					Title:        post.WrSubject,
+					Content:      post.WrContent,
+					EditedBy:     userIDUint,
+					EditedByName: nickname,
+				})
+			}
 
 			// g5_da_content_history에도 이중 기록
 			{
@@ -2844,7 +2901,7 @@ func main() {
 				return
 			}
 
-			// 수정 전 내용을 리비전에 저장
+			// 수정 전 내용을 리비전에 저장 — 양쪽 테이블 모두 기록
 			var nextVersion int
 			db.Raw("SELECT COALESCE(MAX(version), 0) + 1 FROM g5_write_revisions WHERE board_id = ? AND wr_id = ?",
 				slug, commentID).Scan(&nextVersion)
@@ -2852,6 +2909,19 @@ func main() {
 				(board_id, wr_id, version, change_type, title, content, edited_by, edited_by_name, edited_at)
 				VALUES (?, ?, ?, 'update', NULL, ?, ?, ?, NOW())`,
 				slug, commentID, nextVersion, comment.WrContent, userID, comment.WrName)
+			if v2RevisionRepo != nil {
+				userIDUint, _ := strconv.ParseUint(userID, 10, 64)
+				nickname := middleware.GetNickname(c)
+				v2NextVer, _ := v2RevisionRepo.GetNextVersion(safeIntToUint64(commentID))
+				_ = v2RevisionRepo.Create(&v2domain.V2ContentRevision{
+					PostID:       safeIntToUint64(commentID),
+					Version:      v2NextVer,
+					ChangeType:   "update",
+					Content:      comment.WrContent,
+					EditedBy:     userIDUint,
+					EditedByName: nickname,
+				})
+			}
 
 			// g5_da_content_history에도 이중 기록
 			{
@@ -3016,7 +3086,37 @@ func main() {
 				return
 			}
 
-			// 일반 사용자: 무조건 지연 소프트 삭제
+			// 일반 사용자: 작성 후 5분 이내면 즉시 소프트 삭제 (grace period)
+			const deleteGracePeriod = 5 * time.Minute
+			if time.Since(post.WrDatetime) <= deleteGracePeriod {
+				txErr := db.Transaction(func(tx *gorm.DB) error {
+					now := time.Now()
+					if err := tx.Table(fmt.Sprintf("g5_write_%s", slug)).Where("wr_id = ?", postID).Updates(map[string]interface{}{
+						"wr_deleted_at": now,
+						"wr_deleted_by": userID,
+					}).Error; err != nil {
+						return err
+					}
+					return createWriteAfterEvent(
+						tx,
+						writeAfterEventRepo,
+						gnuboard.WriteAfterEventTypePostDeleted,
+						slug,
+						postID,
+						withWriteAfterMember(post.MbID, post.WrName),
+						withWriteAfterSubject(post.WrSubject),
+						withWriteAfterOccurredAt(now),
+					)
+				})
+				if txErr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "게시글 삭제 실패"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"success": true, "message": "삭제 완료"})
+				return
+			}
+
+			// 5분 초과: 지연 소프트 삭제
 			commentCount := post.WrComment
 			delayMinutes := gnuboard.CalculateDelay(commentCount)
 
