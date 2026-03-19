@@ -809,6 +809,22 @@ func (h *V2Handler) CreateComment(c *gin.Context) {
 	// 레벨 체크 (미들웨어 우회 방어)
 	userLevel := middleware.GetUserLevel(c)
 
+	// 소명 게시판: admin과 글 작성자만 댓글 가능
+	if slug == "claim" {
+		isAdmin := userLevel >= 10
+		if !isAdmin {
+			post, postErr := h.postRepo.FindByID(postID)
+			if postErr != nil {
+				common.V2ErrorResponse(c, http.StatusInternalServerError, "게시글 조회 실패", postErr)
+				return
+			}
+			if post.UserID != userID {
+				common.V2ErrorResponse(c, http.StatusForbidden, "소명 게시판에서는 관리자와 글 작성자만 댓글을 작성할 수 있습니다.", nil)
+				return
+			}
+		}
+	}
+
 	// 제휴 링크 차단 검증 (deal, economy 게시판)
 	if err := common.ValidateAffiliateLinks(req.Content, slug, userLevel, false); err != nil {
 		common.V2ErrorResponse(c, http.StatusForbidden, err.Error(), err)

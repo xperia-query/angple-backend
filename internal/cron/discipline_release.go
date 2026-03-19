@@ -1,11 +1,32 @@
 package cron
 
 import (
+	"fmt"
 	"log"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+const (
+	cronInterceptDateFormat      = "2006-01-02 15:04:05"
+	cronInterceptDateDashFormat  = "2006-01-02"
+	cronInterceptDateShortFormat = "20060102"
+)
+
+// parseInterceptDateForCron parses mb_intercept_date (YYYYMMDD or YYYY-MM-DD HH:MM:SS)
+func parseInterceptDateForCron(s string) (time.Time, error) {
+	if t, err := time.ParseInLocation(cronInterceptDateFormat, s, time.Local); err == nil {
+		return t, nil
+	}
+	if t, err := time.ParseInLocation(cronInterceptDateDashFormat, s, time.Local); err == nil {
+		return t.Add(24*time.Hour - time.Second), nil
+	}
+	if t, err := time.ParseInLocation(cronInterceptDateShortFormat, s, time.Local); err == nil {
+		return t.Add(24*time.Hour - time.Second), nil
+	}
+	return time.Time{}, fmt.Errorf("unknown date format: %s", s)
+}
 
 // DisciplineReleaseResult contains the result of discipline release
 type DisciplineReleaseResult struct {
@@ -27,14 +48,29 @@ func runDisciplineRelease(db *gorm.DB) (*DisciplineReleaseResult, error) {
 	// LevelRestoredCount, LevelRestoredIDs는 항상 0/empty (struct 호환성 유지)
 
 	// Clear expired intercept dates
-	var interceptIDs []string
+	// 형식이 혼재(YYYYMMDD, YYYY-MM-DD HH:MM:SS)할 수 있으므로 모든 후보를 로드 → Go에서 파싱
+	type interceptRow struct {
+		MbID          string `gorm:"column:mb_id"`
+		InterceptDate string `gorm:"column:mb_intercept_date"`
+	}
+	var candidates []interceptRow
 	if err := db.Raw(`
-		SELECT mb_id FROM g5_member
+		SELECT mb_id, mb_intercept_date FROM g5_member
 		WHERE mb_intercept_date != '' AND mb_intercept_date != '0000-00-00'
-		  AND mb_intercept_date < ?
 		  AND mb_intercept_date NOT LIKE '9999%'
-	`, now.Format("20060102")).Scan(&interceptIDs).Error; err != nil {
+	`).Scan(&candidates).Error; err != nil {
 		return nil, err
+	}
+
+	var interceptIDs []string
+	for _, c := range candidates {
+		banEnd, err := parseInterceptDateForCron(c.InterceptDate)
+		if err != nil {
+			continue
+		}
+		if now.After(banEnd) {
+			interceptIDs = append(interceptIDs, c.MbID)
+		}
 	}
 
 	if len(interceptIDs) > 0 {

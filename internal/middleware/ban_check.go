@@ -51,7 +51,7 @@ func BanCheck(gnuDB *gorm.DB) gin.HandlerFunc {
 			fallbackErr := gnuDB.Raw(
 				`SELECT CASE
 						WHEN penalty_period = -1 THEN '99991231'
-						ELSE DATE_FORMAT(DATE_ADD(penalty_date_from, INTERVAL penalty_period DAY), '%Y%m%d')
+						ELSE DATE_FORMAT(DATE_ADD(penalty_date_from, INTERVAL penalty_period DAY), '%Y-%m-%d %H:%i:%s')
 					END
 				 FROM g5_da_member_discipline
 				 WHERE penalty_mb_id = ?
@@ -66,7 +66,7 @@ func BanCheck(gnuDB *gorm.DB) gin.HandlerFunc {
 				c.Next()
 				return
 			}
-			// 활성 제재 발견 — mb_intercept_date 자동 복구(backfill, varchar(8) YYYYMMDD)
+			// 활성 제재 발견 — mb_intercept_date 자동 복구(backfill, datetime 형식)
 			gnuDB.Exec("UPDATE g5_member SET mb_intercept_date = ? WHERE mb_id = ?", penaltyEndDate, mbID)
 			interceptDate = penaltyEndDate
 		}
