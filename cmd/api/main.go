@@ -1827,7 +1827,7 @@ func main() {
 				}
 			}
 
-			postDetail := v1handler.TransformToV1PostDetail(post, isNotice)
+			postDetail := v1handler.TransformToV1PostDetail(post, isNotice, slug)
 
 			// 태그 조회
 			if tags, err := gnuTagRepo.GetPostTags(slug, id); err == nil && len(tags) > 0 {
@@ -2390,7 +2390,7 @@ func main() {
 
 			payload := gin.H{
 				"success": true,
-				"data":    v1handler.TransformToV1PostDetail(&post, false),
+				"data":    v1handler.TransformToV1PostDetail(&post, false, slug),
 			}
 			storeIdempotentWriteResponse(c.Request.Context(), redisClient, idempotencyBaseKey, http.StatusCreated, payload)
 			phaseDurations["after_write"] = time.Since(phaseStart)
