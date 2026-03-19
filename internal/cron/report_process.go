@@ -85,7 +85,7 @@ func runProcessApprovedReports(db *gorm.DB) (*ProcessReportsResult, error) {
 			COUNT(*) as report_count
 		FROM g5_na_singo
 		WHERE admin_approved = 1 AND processed = 0
-		GROUP BY target_mb_id, admin_discipline_days, admin_discipline_type, DATE(admin_datetime)
+		GROUP BY target_mb_id, admin_discipline_days, admin_discipline_type, admin_discipline_reasons, DATE(admin_datetime)
 		ORDER BY MAX(admin_datetime) ASC
 	`).Scan(&groups).Error; err != nil {
 		return nil, fmt.Errorf("승인된 신고 조회 실패: %w", err)
